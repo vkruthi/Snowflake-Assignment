@@ -1,0 +1,133 @@
+-- Step1: Creating Admin, Developer and PII role
+CREATE role Admin;
+CREATE role Developer;
+CREATE role PII;
+
+GRANT ROLE ACCOUNTADMIN TO ROLE admin;
+
+
+
+-- Step2: Creating Medium sized warehoue
+CREATE WAREHOUSE assignment_wh
+    WITH
+        WAREHOUSE_SIZE = 'Medium'
+        AUTO_SUSPEND = 5
+        AUTO_RESUME = True;
+
+
+
+-- STEP3: SWITCHING TO ADMIN ROLE
+USE ROLE Admin;
+
+
+
+-- STEP4: CREATING DATABASE
+CREATE DATABASE assignment_db;
+
+
+
+-- STEP5: CREATING SCHEMA
+CREATE SCHEMA assignment_db.my_schema;
+
+
+
+-- STEP6: CREATING TABLE
+CREATE TABLE assignment_db.my_schema.employee (
+  id INT,
+  first_name STRING,
+  last_name STRING,
+  email STRING,
+  phone_number STRING
+);
+
+CREATE TABLE assignment_db.my_schema.employee_ext (
+  id INT,
+  first_name STRING,
+  last_name STRING,
+  email STRING,
+  phone_number STRING
+);
+
+
+
+-- STEP7: CREATING VARIANT VERSION OF IT.
+CREATE TABLE assignment_db.my_schema.employee_variant (
+  data VARIANT
+);
+
+
+
+-- STEP8: LOADING FILE INTO EXTERNAL AND INTERNAL STAGE
+
+-- FROM INTERNAL STORAGE
+CREATE STAGE MY_ASSIGNMENT_STAGE2; 
+
+-- FROM EXTERNAL STORAGE
+CREATE OR REPLACE STORAGE INTEGRATION MY_ASSIGNMENT_EXT_STAGE
+    TYPE = EXTERNAL_STAGE
+    STORAGE_PROVIDER = AZURE
+    ENABLED = TRUE
+    AZURE_TENANT_ID = '5e4c44ce-af63-474f-bc8f-fd09929d48e8'
+    STORAGE_ALLOWED_LOCATIONS = ('azure://snowflakeassignment.blob.core.windows.net/data/data.csv');
+
+DESC STORAGE integration MY_ASSIGNMENT_EXT_STAGE;
+
+CREATE OR REPLACE file format ASSIGNMENT_DB.MY_SCHEMA.fileForm
+    TYPE = CSV
+    FIELD_DELIMITER = ','
+    SKIP_HEADER = 1;
+
+CREATE OR REPLACE STAGE MY_ASSIGNMENT_EXT_STAGE2
+    STORAGE_INTEGRATION = MY_ASSIGNMENT_EXT_STAGE
+    URL = 'azure://snowflakeassignment.blob.core.windows.net/source/data.csv'
+    FILE_FORMAT = ASSIGNMENT_DB.MY_SCHEMA.fileForm;
+
+LIST @MY_ASSIGNMENT_EXT_STAGE2;
+
+
+
+-- STEP9: LOADING FILE TO TABLE FROM INTERNAL STAGE
+COPY INTO employee
+FROM @MY_ASSIGNMENT_STAGE/DATA.csv.gz
+FILE_FORMAT = (TYPE = 'CSV')
+ON_ERROR = 'CONTINUE';
+
+COPY INTO my_schema.employee_ext 
+FROM @MY_ASSIGNMENT_EXT_STAGE2 
+FILE_FORMAT = (TYPE = 'CSV')
+ON_ERROR = 'CONTINUE';
+
+
+
+-- STEP10:UPLOADING PARQUET FILE TO STAGE 
+CREATE OR REPLACE STAGE my_assignment_parquet_stage;
+
+
+
+-- STEP11: LOADING PARQUET FILE
+CREATE OR REPLACE FILE FORMAT my_parquet_format
+  TYPE = 'PARQUET';
+
+SELECT *
+FROM @my_assignment_parquet_stage/DATA.parquet
+  (FILE_FORMAT => 'my_parquet_format');
+
+
+
+-- STEP12: ADDING MASKING POLICY FOR DEVELOPER AND PII ROLES
+
+-- FOR PII ROLES
+CREATE OMASKING POLICY mask_pii
+  AS (val STRING) 
+  RETURNS STRING ->
+    CASE
+      WHEN CURRENT_ROLE() IN ('PII_ROLE') THEN val
+      ELSE '****'
+    END;
+
+-- FOR DEVELOPER ROLES
+ALTER TABLE ASSIGNMENT_DB.MY_SCHEMA.EMPLOYEE 
+  MODIFY COLUMN email SET MASKING POLICY mask_pii;
+
+ALTER TABLE ASSIGNMENT_DB.MY_SCHEMA.EMPLOYEE 
+  MODIFY COLUMN phone_number SET MASKING POLICY mask_pii;
